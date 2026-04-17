@@ -1,6 +1,6 @@
 # ProfileMe API
 
-A highly concurrent, asynchronous REST API that aggregates data from multiple public demographics APIs (Genderize, Agify, Nationalize) to generate and persist predictive user profiles based on a given name.
+This is an API that aggregates data from multiple public demographics APIs (Genderize, Agify, Nationalize) to generate and persist predictive user profiles based on a given name.
 
 
 Built with **FastAPI**, **SQLAlchemy**, and **PostgreSQL** (NeonDB).
@@ -87,7 +87,7 @@ Deletes the specified profile. Returns `204 No Content` on success.
 
 **1. Clone the repository:**
 ```bash
-git clone [https://github.com/yourusername/ProfileMeAPI.git](https://github.com/yourusername/ProfileMeAPI.git)
+git clone [https://github.com/C-J7/ProfileMeAPI](https://github.com/C-J7/ProfileMeAPI.git)
 cd ProfileMeAPI
 ```
 
@@ -109,7 +109,7 @@ pip install -r requirements.txt
 **4. Environment Variables:**
 Create a `.env` file in the root directory. If `DATABASE_URL` is omitted, the application will default to a local SQLite database (`profiles.db`).
 ```env
-DATABASE_URL="postgresql+psycopg://user:password@host/dbname?sslmode=require"
+DATABASE_URL="your-connection-string"
 ```
 
 
@@ -117,5 +117,5 @@ DATABASE_URL="postgresql+psycopg://user:password@host/dbname?sslmode=require"
 ```bash
 uvicorn main:app --reload
 ```
-The API will be available at `http://127.0.0.1:8000`. You can view the interactive Swagger documentation at `http://127.0.0.1:8000/docs`.
+The API will be available at `http://127.0.0.1:8000`. You can view the interactive Swagger documentation at `https://profile-me-api.vercel.app/docs`.
 
