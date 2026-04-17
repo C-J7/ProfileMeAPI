@@ -7,7 +7,7 @@ Built with **FastAPI**, **SQLAlchemy**, and **PostgreSQL** (NeonDB).
 
 
 ##  Live Demo
-**Base URL:** `[link]`
+**Base URL:** `[https://profile-me-api.vercel.app/]`
 
 
 ##  Tech Stack
