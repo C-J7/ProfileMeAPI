@@ -1,4 +1,4 @@
-# Profiler API
+# ProfileMe API
 
 This is a FastAPI service for demographic profile storage, filtering, sorting, pagination, and with a rule-based natural language search.
 
