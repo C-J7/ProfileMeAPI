@@ -1,121 +1,104 @@
-# ProfileMe API
+# Profiler API
 
-This is an API that aggregates data from multiple public demographics APIs (Genderize, Agify, Nationalize) to generate and persist predictive user profiles based on a given name.
+This is a FastAPI service for demographic profile storage, filtering, sorting, pagination, and with a rule-based natural language search.
 
+## Overview
+- Framework: FastAPI
+- ORM: SQLAlchemy
+- Database: PostgreSQL in production, SQLite locally, neonDb in prod.
+- CORS: `Access-Control-Allow-Origin: *`
 
-Built with **FastAPI**, **SQLAlchemy**, and **PostgreSQL** (NeonDB).
+## Files
+- `main.py` - API implementation
+- `readme.md` - project documentation
+- `requirements.txt` - dependencies
+- `profiles-2026.json` - seed dataset
 
+## Setup
 
-##  Live Demo
-**Base URL:** `[https://profile-me-api.vercel.app/]`
-
-
-##  Tech Stack
-* **Framework:** FastAPI
-* **Database:** PostgreSQL (Production) / SQLite (Local)
-* **ORM:** SQLAlchemy
-* **HTTP Client:** `httpx` (Asynchronous requests)
-* **Data Types:** UUIDv7, UTC ISO 8601 Timestamps
-
-
-##  Core Features
-* **Concurrent API Aggregation:** Utilizes `asyncio.gather` to fetch data from three external APIs simultaneously, reducing latency.
-* **Idempotent Profile Creation:** Safely handles duplicate name requests without creating redundant database entries or wasting external API calls.
-* **Case-Insensitive Filtering:** Robust search functionality for retrieving profiles based on demographic parameters.
-* **Strict Error Handling:** Graceful failure states for upstream API timeouts or missing data elements.
-
-
-##  API Endpoints
-
-
-### 1. Create a Profile
-**POST** `/api/profiles`
-
-
-```json
-// Request
-{
-  "name": "ella"
-}
-
-
-// Response (201 Created)
-{
-  "status": "success",
-  "data": {
-    "id": "018e9f5b-1234-7abc-8def-123456789abc",
-    "name": "ella",
-    "gender": "female",
-    "gender_probability": 0.99,
-    "sample_size": 1234,
-    "age": 46,
-    "age_group": "adult",
-    "country_id": "DRC",
-    "country_probability": 0.85,
-    "created_at": "2026-04-01T12:00:00Z"
-  }
-}
-```
-
-
-### 2. Get a Single Profile
-**GET** `/api/profiles/{id}`
-Returns a specific profile by its UUIDv7 identifier.
-
-
-### 3. Get All Profiles
-**GET** `/api/profiles`
-Returns a list of all stored profiles.
-
-
-**Optional Query Parameters (Case-Insensitive):**
-* `?gender=male`
-* `?country_id=NG`
-* `?age_group=adult`
-
-
-### 4. Delete a Profile
-**DELETE** `/api/profiles/{id}`
-Deletes the specified profile. Returns `204 No Content` on success.
-
-
----
-
-
-##  Local Development Setup
-
-
-**1. Clone the repository:**
-```bash
-git clone [https://github.com/C-J7/ProfileMeAPI](https://github.com/C-J7/ProfileMeAPI.git)
-cd ProfileMeAPI
-```
-
-
-**2. Set up a virtual environment:**
 ```bash
 python -m venv venv
-source venv/Scripts/activate  # On Windows
-# source venv/bin/activate    # On Mac/Linux
+source venv/Scripts/activate  #Windows
+pip install -r requirements.txt #To install dependencies. 
 ```
 
+Create a `.env` file if needed:
 
-**3. Install dependencies:**
-```bash
-pip install -r requirements.txt
-```
-
-
-**4. Environment Variables:**
-Create a `.env` file in the root directory. If `DATABASE_URL` is omitted, the application will default to a local SQLite database (`profiles.db`).
 ```env
-DATABASE_URL="your-connection-string"
+DATABASE_URL="your-database-url"
+SEED_FILE_PATH="profiles-2026.json"
 ```
 
+Run locally:
 
-**5. Run the server:**
 ```bash
 uvicorn main:app --reload
 ```
-The API will be available at `http://127.0.0.1:8000`. You can view the interactive Swagger documentation at `https://profile-me-api.vercel.app/docs`.
 
+## API Endpoints
+
+### `POST /api/profiles`
+Creates a profile from external demographic APIs. Returns an existing record if the name already exists.
+
+### `GET /api/profiles/{profile_id}`
+Returns a single profile by UUIDv7.
+
+### `GET /api/profiles`
+Supports combined filtering, sorting, and pagination.
+
+Query parameters:
+
+- `gender`
+- `age_group`
+- `country_id`
+- `min_age`
+- `max_age`
+- `min_gender_probability`
+- `min_country_probability`
+- `sort_by=age|created_at|gender_probability`
+- `order=asc|desc`
+- `page` default `1`
+- `limit` default `10`, max `50`
+
+### `GET /api/profiles/search?q=...`
+Rule-based natural language search.
+
+Supported examples:
+
+- `young males from nigeria` -> `gender=male`, `min_age=16`, `max_age=24`, `country_id=NG`
+- `females above 30` -> `gender=female`, `min_age=30`
+- `adult males from kenya` -> `gender=male`, `age_group=adult`, `country_id=KE`
+- `male and female teenagers above 17` -> `age_group=teenager`, `min_age=17`
+
+If the query cannot be interpreted, the API returns:
+
+```json
+{ "status": "error", "message": "Unable to interpret query" }
+```
+
+### `DELETE /api/profiles/{profile_id}`
+Deletes a profile and returns `204 No Content`.
+
+## Natural Language Parsing
+
+The parser is deterministic and uses hashmaps plus regex rules, not LLMs.
+
+Keyword groups:
+
+- Gender synonyms map to `male` or `female`
+- Age group synonyms map to `child`, `teenager`, `adult`, `senior`
+- Country names map to ISO country codes
+- `young` maps to ages `16-24`
+- `above`, `over`, `at least` map to minimum age
+- `below`, `under`, `at most` map to maximum age
+
+Limitations:
+- Only predefined keywords and age phrases are supported
+- Spelling mistakes are not corrected
+- Complex grammar, negation, and OR-based country queries are not supported
+- If both male and female are present, gender is treated as non-restrictive
+
+## Seeding
+The app seeds from `profiles-2026.json` on startup when `SEED_FILE_PATH` is set or when the fallback file exists in the repo root.
+
+Re-running the seed is safe because names are checked before insert.
