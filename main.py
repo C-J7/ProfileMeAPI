@@ -827,6 +827,51 @@ async def create_profile(request: Request, db: Session = Depends(get_db)):
 
 
 
+@app.get("/api/profiles/search")
+async def search_profiles(
+    q: Optional[str] = Query(default=None),
+    page: int = Query(default=1),
+    limit: int = Query(default=10),
+    db: Session = Depends(get_db),
+):
+    if q is None or not isinstance(q, str) or not q.strip():
+        raise HTTPException(status_code=400, detail="Missing or empty parameter")
+
+    page, limit = normalize_pagination(page, limit)
+
+    try:
+        parsed_filters = parse_natural_language_query(q)
+    except HTTPException as exc:
+        if exc.status_code == 400 and exc.detail == "Unable to interpret query":
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Unable to interpret query"},
+            )
+        raise
+
+    query = db.query(Profile)
+    query = apply_profile_filters(
+        query,
+        gender=parsed_filters.get("gender"),
+        age_group=parsed_filters.get("age_group"),
+        country_id=parsed_filters.get("country_id"),
+        min_age=parsed_filters.get("min_age"),
+        max_age=parsed_filters.get("max_age"),
+    )
+
+    total = query.count()
+    offset = (page - 1) * limit
+    profiles = query.order_by(Profile.created_at.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "status": "success",
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "data": [serialize_profile(profile) for profile in profiles],
+    }
+
+
 @app.get("/api/profiles/{profile_id}")
 async def get_single_profile(profile_id: str, db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
@@ -889,46 +934,6 @@ async def get_all_profiles(
 
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
-
-    return {
-        "status": "success",
-        "page": page,
-        "limit": limit,
-        "total": total,
-        "data": [serialize_profile(profile) for profile in profiles],
-    }
-
-
-@app.get("/api/profiles/search")
-async def search_profiles(
-    q: Optional[str] = Query(default=None),
-    page: int = Query(default=1),
-    limit: int = Query(default=10),
-    db: Session = Depends(get_db),
-):
-    if q is None or not isinstance(q, str) or not q.strip():
-        raise HTTPException(status_code=400, detail="Missing or empty parameter")
-
-    page, limit = normalize_pagination(page, limit)
-
-    if page < 1:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-
-    parsed_filters = parse_natural_language_query(q)
-
-    query = db.query(Profile)
-    query = apply_profile_filters(
-        query,
-        gender=parsed_filters.get("gender"),
-        age_group=parsed_filters.get("age_group"),
-        country_id=parsed_filters.get("country_id"),
-        min_age=parsed_filters.get("min_age"),
-        max_age=parsed_filters.get("max_age"),
-    )
-
-    total = query.count()
-    offset = (page - 1) * limit
-    profiles = query.order_by(Profile.created_at.desc()).offset(offset).limit(limit).all()
 
     return {
         "status": "success",
