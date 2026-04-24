@@ -10,6 +10,31 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "any",
+    "for",
+    "group",
+    "individuals",
+    "of",
+    "old",
+    "olds",
+    "people",
+    "person",
+    "persons",
+    "population",
+    "profile",
+    "profiles",
+    "records",
+    "the",
+    "to",
+    "users",
+    "with",
+    "year",
+    "years",
+}
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -187,6 +212,52 @@ COUNTRY_NAME_BY_ID = {
     "AR": "Argentina",
 }
 
+COUNTRY_ADJECTIVE_KEYWORDS = {
+    "nigerian": "NG",
+    "kenyan": "KE",
+    "angolan": "AO",
+    "beninese": "BJ",
+    "ghanaian": "GH",
+    "ugandan": "UG",
+    "tanzanian": "TZ",
+    "south african": "ZA",
+    "zambian": "ZM",
+    "zimbabwean": "ZW",
+    "ethiopian": "ET",
+    "cameroonian": "CM",
+    "senegalese": "SN",
+    "ivorian": "CI",
+    "rwandan": "RW",
+    "burundian": "BI",
+    "algerian": "DZ",
+    "moroccan": "MA",
+    "egyptian": "EG",
+    "tunisian": "TN",
+    "namibian": "NA",
+    "botswanan": "BW",
+    "sierra leonean": "SL",
+    "liberian": "LR",
+    "malian": "ML",
+    "burkinabe": "BF",
+    "chadian": "TD",
+    "nigerien": "NE",
+    "congolese": "CG",
+    "american": "US",
+    "canadian": "CA",
+    "british": "GB",
+    "french": "FR",
+    "german": "DE",
+    "italian": "IT",
+    "spanish": "ES",
+    "portuguese": "PT",
+    "indian": "IN",
+    "chinese": "CN",
+    "japanese": "JP",
+    "brazilian": "BR",
+    "mexican": "MX",
+    "argentinian": "AR",
+}
+
 GENDER_KEYWORDS = {
     "male": "male",
     "males": "male",
@@ -228,7 +299,7 @@ AGE_GROUP_KEYWORDS = {
     "old-timer": "senior",
 }
 
-YOUNG_KEYWORDS = {"young", "youth", "youths", "juvenile", "juveniles", "adolescent", "adolescents"}
+YOUNG_KEYWORDS = {"young", "youth", "youths", "juvenile", "juveniles", "adolescent", "adolescents", }
 
 
 class Profile(Base):
@@ -445,8 +516,19 @@ def validate_query_filters(
         raise HTTPException(status_code=422, detail="Invalid query parameters")
     if order not in {"asc", "desc"}:
         raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if page < 1 or not 1 <= limit <= 50:
+    if page < 1 or limit < 1:
         raise HTTPException(status_code=422, detail="Invalid query parameters")
+
+
+def normalize_pagination(page: int, limit: int) -> tuple[int, int]:
+    return max(page, 1), min(max(limit, 1), 50)
+
+
+def normalize_natural_language_query(q: str) -> str:
+    cleaned = re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9\s']", " ", q.lower())).strip()
+    cleaned = re.sub(r"\b(?:and|or|of|the|a|an)\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 def apply_profile_filters(
@@ -478,14 +560,14 @@ def apply_profile_filters(
 
 
 def parse_natural_language_query(q: str) -> dict[str, Any]:
-    cleaned = re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9\s']", " ", q.lower())).strip()
+    cleaned = normalize_natural_language_query(q)
     if not cleaned:
         raise HTTPException(status_code=400, detail="Missing or empty parameter")
 
     filters: dict[str, Any] = {}
     parsed_any = False
 
-    tokens = cleaned.split()
+    tokens = [token for token in cleaned.split() if token not in STOPWORDS]
     genders_found = {GENDER_KEYWORDS[token] for token in tokens if token in GENDER_KEYWORDS}
     if len(genders_found) == 1:
         filters["gender"] = next(iter(genders_found))
@@ -520,11 +602,22 @@ def parse_natural_language_query(q: str) -> dict[str, Any]:
             if country_phrase.startswith(keyword):
                 country_id = COUNTRY_KEYWORDS[keyword]
                 break
+        if not country_id:
+            for keyword in sorted(COUNTRY_ADJECTIVE_KEYWORDS.keys(), key=len, reverse=True):
+                if country_phrase.startswith(keyword):
+                    country_id = COUNTRY_ADJECTIVE_KEYWORDS[keyword]
+                    break
 
     if not country_id:
         for keyword in sorted(COUNTRY_KEYWORDS.keys(), key=len, reverse=True):
             if re.search(rf"\b{re.escape(keyword)}\b", cleaned):
                 country_id = COUNTRY_KEYWORDS[keyword]
+                break
+
+    if not country_id:
+        for keyword in sorted(COUNTRY_ADJECTIVE_KEYWORDS.keys(), key=len, reverse=True):
+            if re.search(rf"\b{re.escape(keyword)}\b", cleaned):
+                country_id = COUNTRY_ADJECTIVE_KEYWORDS[keyword]
                 break
 
     if country_id:
@@ -759,6 +852,7 @@ async def get_all_profiles(
     limit: int = Query(default=10),
     db: Session = Depends(get_db),
 ):
+    page, limit = normalize_pagination(page, limit)
     validate_query_filters(
         gender,
         age_group,
@@ -815,7 +909,9 @@ async def search_profiles(
     if q is None or not isinstance(q, str) or not q.strip():
         raise HTTPException(status_code=400, detail="Missing or empty parameter")
 
-    if page < 1 or not 1 <= limit <= 50:
+    page, limit = normalize_pagination(page, limit)
+
+    if page < 1:
         raise HTTPException(status_code=422, detail="Invalid query parameters")
 
     parsed_filters = parse_natural_language_query(q)
