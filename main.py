@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import os
 import re
@@ -10,31 +9,6 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
-STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "any",
-    "for",
-    "group",
-    "individuals",
-    "of",
-    "old",
-    "olds",
-    "people",
-    "person",
-    "persons",
-    "population",
-    "profile",
-    "profiles",
-    "records",
-    "the",
-    "to",
-    "users",
-    "with",
-    "year",
-    "years",
-}
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -43,6 +17,29 @@ from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
+
+from constants import (
+    AGE_GROUP_KEYWORDS,
+    COUNTRY_ADJECTIVE_KEYWORDS,
+    COUNTRY_KEYWORDS,
+    COUNTRY_NAME_BY_ID,
+    GENDER_KEYWORDS,
+    SORT_COLUMN_MAP,
+    STOPWORDS,
+    VALID_AGE_GROUPS,
+    VALID_GENDERS,
+    YOUNG_KEYWORDS,
+)
+from services.profile_helpers import (
+    fallback_age_value,
+    fallback_country_values,
+    fallback_genderize_values,
+    get_age_group,
+    parse_agify_payload,
+    parse_genderize_payload,
+    parse_nationalize_payload,
+    serialize_profile,
+)
 
 
 load_dotenv()
@@ -102,204 +99,6 @@ engine, DATABASE_URL = build_database_engine()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
-
-VALID_GENDERS = {"male", "female"}
-VALID_AGE_GROUPS = {"child", "teenager", "adult", "senior"}
-
-SORT_COLUMN_MAP = {
-    "age": "age",
-    "created_at": "created_at",
-    "gender_probability": "gender_probability",
-}
-
-COUNTRY_KEYWORDS = {
-    "nigeria": "NG",
-    "kenya": "KE",
-    "angola": "AO",
-    "benin": "BJ",
-    "ghana": "GH",
-    "uganda": "UG",
-    "tanzania": "TZ",
-    "south africa": "ZA",
-    "zambia": "ZM",
-    "zimbabwe": "ZW",
-    "ethiopia": "ET",
-    "cameroon": "CM",
-    "senegal": "SN",
-    "ivory coast": "CI",
-    "cote d'ivoire": "CI",
-    "cote divoire": "CI",
-    "rwanda": "RW",
-    "burundi": "BI",
-    "algeria": "DZ",
-    "morocco": "MA",
-    "egypt": "EG",
-    "tunisia": "TN",
-    "namibia": "NA",
-    "botswana": "BW",
-    "sierra leone": "SL",
-    "liberia": "LR",
-    "mali": "ML",
-    "burkina faso": "BF",
-    "chad": "TD",
-    "niger": "NE",
-    "congo": "CG",
-    "dr congo": "CD",
-    "democratic republic of congo": "CD",
-    "united states": "US",
-    "usa": "US",
-    "canada": "CA",
-    "united kingdom": "GB",
-    "uk": "GB",
-    "france": "FR",
-    "germany": "DE",
-    "italy": "IT",
-    "spain": "ES",
-    "portugal": "PT",
-    "india": "IN",
-    "china": "CN",
-    "japan": "JP",
-    "brazil": "BR",
-    "mexico": "MX",
-    "argentina": "AR",
-}
-
-COUNTRY_NAME_BY_ID = {
-    "NG": "Nigeria",
-    "KE": "Kenya",
-    "AO": "Angola",
-    "BJ": "Benin",
-    "GH": "Ghana",
-    "UG": "Uganda",
-    "TZ": "Tanzania",
-    "ZA": "South Africa",
-    "ZM": "Zambia",
-    "ZW": "Zimbabwe",
-    "ET": "Ethiopia",
-    "CM": "Cameroon",
-    "SN": "Senegal",
-    "CI": "Cote d'Ivoire",
-    "RW": "Rwanda",
-    "BI": "Burundi",
-    "DZ": "Algeria",
-    "MA": "Morocco",
-    "EG": "Egypt",
-    "TN": "Tunisia",
-    "NA": "Namibia",
-    "BW": "Botswana",
-    "SL": "Sierra Leone",
-    "LR": "Liberia",
-    "ML": "Mali",
-    "BF": "Burkina Faso",
-    "TD": "Chad",
-    "NE": "Niger",
-    "CG": "Congo",
-    "CD": "Democratic Republic of the Congo",
-    "US": "United States",
-    "CA": "Canada",
-    "GB": "United Kingdom",
-    "FR": "France",
-    "DE": "Germany",
-    "IT": "Italy",
-    "ES": "Spain",
-    "PT": "Portugal",
-    "IN": "India",
-    "CN": "China",
-    "JP": "Japan",
-    "BR": "Brazil",
-    "MX": "Mexico",
-    "AR": "Argentina",
-}
-
-COUNTRY_ADJECTIVE_KEYWORDS = {
-    "nigerian": "NG",
-    "kenyan": "KE",
-    "angolan": "AO",
-    "beninese": "BJ",
-    "ghanaian": "GH",
-    "ugandan": "UG",
-    "tanzanian": "TZ",
-    "south african": "ZA",
-    "zambian": "ZM",
-    "zimbabwean": "ZW",
-    "ethiopian": "ET",
-    "cameroonian": "CM",
-    "senegalese": "SN",
-    "ivorian": "CI",
-    "rwandan": "RW",
-    "burundian": "BI",
-    "algerian": "DZ",
-    "moroccan": "MA",
-    "egyptian": "EG",
-    "tunisian": "TN",
-    "namibian": "NA",
-    "botswanan": "BW",
-    "sierra leonean": "SL",
-    "liberian": "LR",
-    "malian": "ML",
-    "burkinabe": "BF",
-    "chadian": "TD",
-    "nigerien": "NE",
-    "congolese": "CG",
-    "american": "US",
-    "canadian": "CA",
-    "british": "GB",
-    "french": "FR",
-    "german": "DE",
-    "italian": "IT",
-    "spanish": "ES",
-    "portuguese": "PT",
-    "indian": "IN",
-    "chinese": "CN",
-    "japanese": "JP",
-    "brazilian": "BR",
-    "mexican": "MX",
-    "argentinian": "AR",
-}
-
-GENDER_KEYWORDS = {
-    "male": "male",
-    "males": "male",
-    "man": "male",
-    "men": "male",
-    "boy": "male",
-    "boys": "male",
-
-
-    "female": "female",
-    "females": "female",
-    "woman": "female",
-    "women": "female",
-    "girl": "female",
-    "girls": "female",
-
-
-}
-
-AGE_GROUP_KEYWORDS = {
-    "child": "child",
-    "children": "child",
-    "baby": "child",
-    "infant": "child",
-    "toddler": "child",
-    "kid": "child",
-    "kids": "child",
-    "teen": "teenager",
-    "teens": "teenager",
-    "teenager": "teenager",
-    "teenagers": "teenager",
-    "adult": "adult",
-    "adults": "adult",
-    "senior": "senior",
-    "seniors": "senior",
-    "elderly": "senior",
-    "old": "senior",
-    "elders": "senior",
-    "old-timer": "senior",
-}
-
-YOUNG_KEYWORDS = {"young", "youth", "youths", "juvenile", "juveniles", "adolescent", "adolescents", }
 
 
 class Profile(Base):
@@ -386,101 +185,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def unhandled_exception_handler(request: Request, exc: Exception):
     return error_response(500, "Server error")
 
-
-
-def get_age_group(age: int) -> str:
-    if age <= 12:
-        return "child"
-    if age <= 19:
-        return "teenager"
-    if age <= 59:
-        return "adult"
-    return "senior"
-
-
-
-def to_utc_iso8601(dt: datetime) -> str:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-
-def serialize_profile(profile: Profile) -> dict[str, Any]:
-    country_id = profile.country_id.upper()
-    return {
-        "id": profile.id,
-        "name": profile.name,
-        "gender": profile.gender,
-        "gender_probability": profile.gender_probability,
-        "sample_size": profile.sample_size,
-        "age": int(profile.age),
-        "age_group": profile.age_group,
-        "country_id": country_id,
-        "country_name": COUNTRY_NAME_BY_ID.get(country_id, country_id),
-        "country_probability": profile.country_probability,
-        "created_at": to_utc_iso8601(profile.created_at),
-    }
-
-
-
-def parse_genderize_payload(data: dict[str, Any]) -> tuple[str, float, int]:
-    gender = data.get("gender")
-    probability = data.get("probability")
-    count = data.get("count")
-    if gender is None or count in (None, 0):
-        raise ValueError
-    return str(gender), float(probability), int(count)
-
-
-
-
-def parse_agify_payload(data: dict[str, Any]) -> int:
-    age = data.get("age")
-    if age is None:
-        raise ValueError
-    return int(age)
-
-
-
-
-def parse_nationalize_payload(data: dict[str, Any]) -> tuple[str, float]:
-    country = data.get("country")
-    if not isinstance(country, list) or not country:
-        raise ValueError
-    top_country = max(country, key=lambda item: float(item.get("probability", 0)))
-    country_id = top_country.get("country_id")
-    probability = top_country.get("probability")
-    if not country_id or probability is None:
-        raise ValueError
-    return str(country_id), float(probability)
-
-
-def stable_digest_int(value: str) -> int:
-    return int(hashlib.sha256(value.encode("utf-8")).hexdigest(), 16)
-
-
-def fallback_genderize_values(name: str) -> tuple[str, float, int]:
-    digest = stable_digest_int(f"gender:{name.lower()}")
-    gender = "female" if digest % 2 else "male"
-    probability = 0.5 + ((digest >> 8) % 5000) / 10000
-    sample_size = 100_000 + (digest % 9_000_000)
-    return gender, round(min(probability, 0.99), 2), sample_size
-
-
-def fallback_age_value(name: str) -> int:
-    digest = stable_digest_int(f"age:{name.lower()}")
-    return 1 + (digest % 90)
-
-
-def fallback_country_values(name: str) -> tuple[str, float]:
-    country_ids = sorted(COUNTRY_NAME_BY_ID.keys())
-    digest = stable_digest_int(f"country:{name.lower()}")
-    country_id = country_ids[digest % len(country_ids)]
-    probability = 0.5 + ((digest >> 10) % 5000) / 10000
-    return country_id, round(min(probability, 0.99), 2)
 
 
 def validate_query_filters(
