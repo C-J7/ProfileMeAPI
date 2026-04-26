@@ -6,3 +6,4 @@ uuid6==2024.1.12
 pydantic==2.11.7
 python-dotenv==1.0.1
 psycopg[binary]==3.3.3
+PyJWT==2.8.0

@@ -7,12 +7,13 @@ from typing import Any, Optional
 
 
 import httpx
+import enum
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, func, inspect
+from sqlalchemy import Column, Enum, Boolean, DateTime, Float, Integer, String, create_engine, func, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
@@ -100,7 +101,6 @@ Base = declarative_base()
 class Profile(Base):
     __tablename__ = "profiles"
 
-
     id = Column(String, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
     gender = Column(String, nullable=False)
@@ -112,7 +112,23 @@ class Profile(Base):
     country_probability = Column(Float, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
+class StatusEnum(enum.Enum): 
+    admin = "admin"
+    analyst = "analyst" 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, index=True)
+    github_id = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, nullable=False)
+    email = Column(String, nullable=True)
+    avatar_url = Column(String, nullable=True)
+    role = Column(Enum(StatusEnum), nullable=False, default="analyst")
+    isactive = Column(Boolean, nullable=False, default=True)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    refresh_token = Column(String, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -512,4 +528,3 @@ async def delete_profile(profile_id: str, db: Session = Depends(get_db)):
     db.delete(profile)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
