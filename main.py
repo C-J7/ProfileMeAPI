@@ -337,7 +337,7 @@ def parse_natural_language_query(q: str) -> dict[str, Any]:
     return filters
 
 
-def maybe_seed_profiles(db: Session) -> None:
+def seed_profiles(db: Session) -> None:
     seed_path = os.getenv("SEED_FILE_PATH", "profiles-2026.json")
     if not seed_path:
         return
@@ -653,7 +653,7 @@ def seed_on_startup() -> None:
     ensure_profiles_schema()
     db = SessionLocal()
     try:
-        maybe_seed_profiles(db)
+        seed_profiles(db)
     finally:
         db.close()
 
