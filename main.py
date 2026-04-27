@@ -455,6 +455,7 @@ async def search_profiles(
     q: Optional[str] = Query(default=None),
     page: int = Query(default=1),
     limit: int = Query(default=10),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if q is None or not isinstance(q, str) or not q.strip():
@@ -496,7 +497,7 @@ async def search_profiles(
 
 
 @app.get("/api/profiles/{profile_id}")
-async def get_single_profile(profile_id: str, db: Session = Depends(get_db)):
+async def get_single_profile(profile_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -518,6 +519,7 @@ async def get_all_profiles(
     order: str = Query(default="desc"),
     page: int = Query(default=1),
     limit: int = Query(default=10),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     page, limit = normalize_pagination(page, limit)
