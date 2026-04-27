@@ -8,6 +8,9 @@ from typing import Any, Optional
 
 import httpx
 import enum
+import time
+from collections import defaultdict
+from fastapi.responses import JSONResponse
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -169,6 +172,54 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+import time
+from collections import defaultdict
+from fastapi.responses import JSONResponse
+
+# In-memory rate limiting
+RATE_LIMITS = {
+    "auth": {"limit": 10, "window": 60},
+    "api": {"limit": 60, "window": 60}
+}
+request_logs = defaultdict(list)
+
+@app.middleware("http")
+async def strict_platform_middleware(request: Request, call_next):
+    start_time = time.time()
+    path = request.url.path
+    client_ip = request.client.host if request.client else "unknown"
+
+    #  API Versioning Check
+    if path.startswith("/api/"):
+        if request.headers.get("X-API-Version") != "1":
+            return JSONResponse(
+                status_code=400, 
+                content={"status": "error", "message": "API version header required"}
+            )
+
+    # Rate Limiting Check
+    current_time = time.time()
+    limit_type = "auth" if path.startswith("/auth/") else "api"
+    window = RATE_LIMITS[limit_type]["window"]
+    max_requests = RATE_LIMITS[limit_type]["limit"]
+
+    # Clean old requests
+    request_logs[client_ip] = [t for t in request_logs[client_ip] if current_time - t < window]
+    
+    if len(request_logs[client_ip]) >= max_requests:
+        return JSONResponse(status_code=429, content={"status": "error", "message": "Too Many Requests"})
+    
+    request_logs[client_ip].append(current_time)
+
+    # Process Request
+    response = await call_next(request)
+
+    # Logging
+    process_time = time.time() - start_time
+    print(f"[{request.method}] {path} - {response.status_code} - {process_time:.4f}s")
+
+    return response
 
 
 
