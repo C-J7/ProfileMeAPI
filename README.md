@@ -1,26 +1,40 @@
-# ProfileMe API
+# ProfileMe Backend for Insighta Labs+ 
 
-This is a FastAPI service for demographic profile storage, filtering, sorting, pagination, and rule-based natural language search.
+The core backend system for Insighta Labs+, a secure profile intelligence platform featuring authentication, RBAC, and multi-interface consistency.
 
-## Overview
-- Framework: FastAPI
-- ORM: SQLAlchemy
-- Database: PostgreSQL in production, SQLite locally, with automatic fallback when a remote database is unavailable.
-- CORS: `Access-Control-Allow-Origin: *`
+## System Architecture
+The system consists of three distinct components communicating with this centralized FastAPI backend:
+1. **Backend (This Repo):** Manages database operations, external API integration, JWT lifecycle, and role-based access control.
+2. **CLI Application:** A globally installable command-line tool that authenticates via PKCE and interacts with the API using Bearer tokens.
+3. **Web Portal:** A frontend dashboard that authenticates using secure, HTTP-only cookies to prevent XSS attacks.
 
-## Files
-- `main.py` - API implementation
-- `readme.md` - project documentation
-- `requirements.txt` - dependencies
-- `profiles-2026.json` - seed dataset
 
-## Setup
+## Authentication Flow
+We utilize **GitHub OAuth with PKCE**:
+1. Clients redirect users to GitHub to authorize.
+2. On callback, the backend exchanges the code (and `code_verifier` for the CLI) for a GitHub token, fetches the user profile, and generates short-lived internal JWTs.
+3. **Web Portal:** Tokens are set as HTTP-only, secure cookies.
+4. **CLI:** Tokens are returned as JSON and stored locally in `~/.insighta/credentials.json`.
+* Tokens adhere to strict expiry windows: Access Token (3 mins), Refresh Token (5 mins). Old refresh tokens are invalidated upon use.
 
+## Role Enforcement Logic
+* **Admin:** Full access. Can create profiles (`POST`), delete profiles (`DELETE`), and query data.
+* **Analyst (Default):** Read-only access. Can search, filter, and export data, but cannot mutate records.
+Roles are enforced at the router level using FastAPI `Depends()` middleware.
+
+## Natural Language Parsing Approach
+The system features a deterministic, rule-based natural language parser (no LLMs):
+* Utilizes static dictionaries to map keywords (e.g., "males" -> "male", "teens" -> "teenager").
+* Employs Regex rules to capture numeric ranges (e.g., "above 30" -> `min_age=30`).
+* Matches country adjectives and names to ISO-3166-1 alpha-2 codes.
+* Unrecognized or conflicting queries fail safely with a `400 Bad Request`.
+
+## Local Setup
 ```bash
 python -m venv venv
-source venv/Scripts/activate  #Windows
-pip install -r requirements.txt #To install dependencies. 
-```
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload
 
 Create a `.env` file if needed:
 
