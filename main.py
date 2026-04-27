@@ -20,6 +20,7 @@ from sqlalchemy import Column, Enum, Boolean, DateTime, Float, Integer, String, 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
+from auth import router as auth_router
 
 from constants import (
     SORT_COLUMN_MAP,
@@ -579,3 +580,5 @@ async def delete_profile(profile_id: str, db: Session = Depends(get_db)):
     db.delete(profile)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+app.include_router(auth_router)
