@@ -10,21 +10,25 @@ import httpx
 import enum
 import time
 from collections import defaultdict
-from fastapi.responses import JSONResponse
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
 from sqlalchemy import Column, Enum, Boolean, DateTime, Float, Integer, String, create_engine, func, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
-from auth import router as auth_router
+from auth import require_admin, get_current_user, router as auth_router
+
+import csv
+from io import StringIO
+
 
 from constants import (
-    SORT_COLUMN_MAP,
+    SORT_COLUMN_MAP, COUNTRY_NAME_BY_ID
 )
+
 from services.profile_helpers import (
     fallback_age_value,
     fallback_country_values,
@@ -323,6 +327,7 @@ def seed_profiles(db: Session) -> None:
 
 
 
+
 async def fetch_external_json(client: httpx.AsyncClient, url: str, service_name: str) -> dict[str, Any]:
     try:
         response = await client.get(url, timeout=10.0)
@@ -337,7 +342,7 @@ async def fetch_external_json(client: httpx.AsyncClient, url: str, service_name:
 
 
 @app.post("/api/profiles", status_code=status.HTTP_201_CREATED)
-async def create_profile(request: Request, db: Session = Depends(get_db)):
+async def create_profile(request: Request, user: User = Depends(require_admin), db: Session = Depends(get_db)):
     try:
         payload = await request.json()
     except Exception:
@@ -552,14 +557,81 @@ async def get_all_profiles(
 
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
 
     return {
         "status": "success",
         "page": page,
         "limit": limit,
         "total": total,
+        "total_pages": total_pages,
+        "links": {
+            "self": f"/api/profiles?page={page}&limit={limit}",
+            "next": f"/api/profiles?page={page+1}&limit={limit}" if page < total_pages else None,
+            "prev": f"/api/profiles?page={page-1}&limit={limit}" if page > 1 else None
+        },
         "data": [serialize_profile(profile) for profile in profiles],
+
     }
+
+
+@app.get("/api/profiles/export")
+async def export_profiles(
+    gender: Optional[str] = Query(default=None),
+    age_group: Optional[str] = Query(default=None),
+    country_id: Optional[str] = Query(default=None),
+    min_age: Optional[int] = Query(default=None),
+    max_age: Optional[int] = Query(default=None),
+    min_gender_probability: Optional[float] = Query(default=None),
+    min_country_probability: Optional[float] = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    order: str = Query(default="desc"),
+   
+    format: str = Query(default="csv"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if format.lower() != "csv":
+        raise HTTPException(status_code=400, detail="Only CSV format is supported")
+
+    query = db.query(Profile)
+    
+    query = apply_profile_filters(
+        query,
+        gender=gender,
+        age_group=age_group,
+        country_id=country_id,
+        min_age=min_age,
+        max_age=max_age,
+        min_gender_probability=min_gender_probability,
+        min_country_probability=min_country_probability,
+    )
+
+
+    if sort_by in SORT_COLUMN_MAP:
+        sort_column = getattr(Profile, SORT_COLUMN_MAP[sort_by])
+        if order.lower() == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+    profiles = query.all()
+
+    stream = StringIO()
+    writer = csv.writer(stream)
+    
+    writer.writerow(["id", "name", "gender", "gender_probability", "age", "age_group", "country_id", "country_name", "country_probability", "created_at"])
+    
+    for p in profiles:
+        writer.writerow([
+            p.id, p.name, p.gender, p.gender_probability, p.age, p.age_group, 
+            p.country_id, COUNTRY_NAME_BY_ID.get(p.country_id, p.country_id), 
+            p.country_probability, p.created_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        ])
+
+    response = StreamingResponse(iter([stream.getvalue()]), media_type="text/csv")
+    response.headers["Content-Disposition"] = f'attachment; filename="profiles_{int(time.time())}.csv"'
+    return response
 
 
 @app.on_event("startup")
@@ -573,7 +645,7 @@ def seed_on_startup() -> None:
 
 
 @app.delete("/api/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_profile(profile_id: str, db: Session = Depends(get_db)):
+async def delete_profile(profile_id: str, user: User = Depends(require_admin), db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
