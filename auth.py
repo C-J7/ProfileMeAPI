@@ -147,4 +147,11 @@ async def logout(response: Response, user: User = Depends(get_current_user), db:
     db.commit()
     response.delete_cookie("access_token")
     response.delete_cookie("refresh_token")
-    return {"status": "success", "message": "Logged out"}
+    # Return JSON for CLI parsing
+    return {
+        "status": "success", 
+        "refresh_token": refresh_token,
+        "username": user.username,
+        "role": user.role,
+        "message": "Logged out successfully"
+    }

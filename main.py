@@ -15,11 +15,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
-from sqlalchemy import Column, Enum, Boolean, DateTime, Float, Integer, String, create_engine, func, inspect
+from sqlalchemy import Column, Boolean, DateTime, Float, Integer, String, create_engine, func, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
-from auth import require_admin, get_current_user, router as auth_router
 
 import csv
 from io import StringIO
@@ -132,7 +131,7 @@ class User(Base):
     username = Column(String, nullable=False)
     email = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
-    role = Column(Enum(StatusEnum), nullable=False, default="analyst")
+    role = Column(String, nullable=False, default="analyst")
     is_active = Column(Boolean, nullable=False, default=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -172,8 +171,8 @@ app = FastAPI(title="ProfileMeAPI")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["http://localhost:5173/"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -340,6 +339,7 @@ async def fetch_external_json(client: httpx.AsyncClient, url: str, service_name:
         raise HTTPException(status_code=502, detail=f"{service_name} returned an invalid response") from exc
 
 
+from auth import require_admin, get_current_user, router as auth_router
 
 @app.post("/api/profiles", status_code=status.HTTP_201_CREATED)
 async def create_profile(request: Request, user: User = Depends(require_admin), db: Session = Depends(get_db)):
