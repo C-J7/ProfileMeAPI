@@ -19,7 +19,6 @@ from sqlalchemy import Column, Enum, Boolean, DateTime, Float, Integer, String, 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
-from auth import require_admin, get_current_user, router as auth_router
 
 import csv
 from io import StringIO
@@ -340,6 +339,7 @@ async def fetch_external_json(client: httpx.AsyncClient, url: str, service_name:
         raise HTTPException(status_code=502, detail=f"{service_name} returned an invalid response") from exc
 
 
+from auth import require_admin, get_current_user, router as auth_router
 
 @app.post("/api/profiles", status_code=status.HTTP_201_CREATED)
 async def create_profile(request: Request, user: User = Depends(require_admin), db: Session = Depends(get_db)):
