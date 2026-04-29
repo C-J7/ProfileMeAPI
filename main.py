@@ -1,35 +1,34 @@
 import asyncio
 import json
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 
 import httpx
+import enum
+import time
+from collections import defaultdict
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
-from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, func, inspect
+from sqlalchemy import Column, Enum, Boolean, DateTime, Float, Integer, String, create_engine, func, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
+from auth import require_admin, get_current_user, router as auth_router
+
+import csv
+from io import StringIO
+
 
 from constants import (
-    AGE_GROUP_KEYWORDS,
-    COUNTRY_ADJECTIVE_KEYWORDS,
-    COUNTRY_KEYWORDS,
-    COUNTRY_NAME_BY_ID,
-    GENDER_KEYWORDS,
-    SORT_COLUMN_MAP,
-    STOPWORDS,
-    VALID_AGE_GROUPS,
-    VALID_GENDERS,
-    YOUNG_KEYWORDS,
+    SORT_COLUMN_MAP, COUNTRY_NAME_BY_ID
 )
+
 from services.profile_helpers import (
     fallback_age_value,
     fallback_country_values,
@@ -39,6 +38,12 @@ from services.profile_helpers import (
     parse_genderize_payload,
     parse_nationalize_payload,
     serialize_profile,
+)
+from services.query_helpers import (
+    apply_profile_filters,
+    normalize_pagination,
+    parse_natural_language_query,
+    validate_query_filters,
 )
 
 
@@ -104,7 +109,6 @@ Base = declarative_base()
 class Profile(Base):
     __tablename__ = "profiles"
 
-
     id = Column(String, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
     gender = Column(String, nullable=False)
@@ -116,7 +120,23 @@ class Profile(Base):
     country_probability = Column(Float, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
+class StatusEnum(enum.Enum): 
+    admin = "admin"
+    analyst = "analyst" 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, index=True)
+    github_id = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, nullable=False)
+    email = Column(String, nullable=True)
+    avatar_url = Column(String, nullable=True)
+    role = Column(Enum(StatusEnum), nullable=False, default="analyst")
+    is_active = Column(Boolean, nullable=False, default=True)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    refresh_token = Column(String, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -158,6 +178,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import time
+from collections import defaultdict
+from fastapi.responses import JSONResponse
+
+# In-memory rate limiting
+RATE_LIMITS = {
+    "auth": {"limit": 10, "window": 60},
+    "api": {"limit": 60, "window": 60}
+}
+request_logs = defaultdict(list)
+
+@app.middleware("http")
+async def strict_platform_middleware(request: Request, call_next):
+    start_time = time.time()
+    path = request.url.path
+    client_ip = request.client.host if request.client else "unknown"
+
+    #  API Versioning Check
+    if path.startswith("/api/"):
+        if request.headers.get("X-API-Version") != "1":
+            return JSONResponse(
+                status_code=400, 
+                content={"status": "error", "message": "API version header required"}
+            )
+
+    # Rate Limiting Check
+    current_time = time.time()
+    limit_type = "auth" if path.startswith("/auth/") else "api"
+    window = RATE_LIMITS[limit_type]["window"]
+    max_requests = RATE_LIMITS[limit_type]["limit"]
+
+    # Clean old requests
+    request_logs[client_ip] = [t for t in request_logs[client_ip] if current_time - t < window]
+    
+    if len(request_logs[client_ip]) >= max_requests:
+        return JSONResponse(status_code=429, content={"status": "error", "message": "Too Many Requests"})
+    
+    request_logs[client_ip].append(current_time)
+
+    # Process Request
+    response = await call_next(request)
+
+    # Logging
+    process_time = time.time() - start_time
+    print(f"[{request.method}] {path} - {response.status_code} - {process_time:.4f}s")
+
+    return response
+
 
 
 def error_response(status_code: int, message: str) -> JSONResponse:
@@ -185,156 +253,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def unhandled_exception_handler(request: Request, exc: Exception):
     return error_response(500, "Server error")
 
-
-
-def validate_query_filters(
-    gender: Optional[str],
-    age_group: Optional[str],
-    country_id: Optional[str],
-    min_age: Optional[int],
-    max_age: Optional[int],
-    min_gender_probability: Optional[float],
-    min_country_probability: Optional[float],
-    sort_by: str,
-    order: str,
-    page: int,
-    limit: int,
-) -> None:
-    if gender is not None and gender.lower() not in VALID_GENDERS:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if age_group is not None and age_group.lower() not in VALID_AGE_GROUPS:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if country_id is not None and (len(country_id.strip()) != 2 or not country_id.strip().isalpha()):
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if min_age is not None and min_age < 0:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if max_age is not None and max_age < 0:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if min_age is not None and max_age is not None and min_age > max_age:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if min_gender_probability is not None and not 0 <= min_gender_probability <= 1:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if min_country_probability is not None and not 0 <= min_country_probability <= 1:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if sort_by not in SORT_COLUMN_MAP:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if order not in {"asc", "desc"}:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-    if page < 1 or limit < 1:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-
-
-def normalize_pagination(page: int, limit: int) -> tuple[int, int]:
-    return max(page, 1), min(max(limit, 1), 50)
-
-
-def normalize_natural_language_query(q: str) -> str:
-    cleaned = re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9\s']", " ", q.lower())).strip()
-    cleaned = re.sub(r"\b(?:and|or|of|the|a|an)\b", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
-def apply_profile_filters(
-    query,
-    *,
-    gender: Optional[str] = None,
-    age_group: Optional[str] = None,
-    country_id: Optional[str] = None,
-    min_age: Optional[int] = None,
-    max_age: Optional[int] = None,
-    min_gender_probability: Optional[float] = None,
-    min_country_probability: Optional[float] = None,
-):
-    if gender:
-        query = query.filter(func.lower(Profile.gender) == gender.strip().lower())
-    if age_group:
-        query = query.filter(func.lower(Profile.age_group) == age_group.strip().lower())
-    if country_id:
-        query = query.filter(func.upper(Profile.country_id) == country_id.strip().upper())
-    if min_age is not None:
-        query = query.filter(Profile.age >= min_age)
-    if max_age is not None:
-        query = query.filter(Profile.age <= max_age)
-    if min_gender_probability is not None:
-        query = query.filter(Profile.gender_probability >= min_gender_probability)
-    if min_country_probability is not None:
-        query = query.filter(Profile.country_probability >= min_country_probability)
-    return query
-
-
-def parse_natural_language_query(q: str) -> dict[str, Any]:
-    cleaned = normalize_natural_language_query(q)
-    if not cleaned:
-        raise HTTPException(status_code=400, detail="Missing or empty parameter")
-
-    filters: dict[str, Any] = {}
-    parsed_any = False
-
-    tokens = [token for token in cleaned.split() if token not in STOPWORDS]
-    genders_found = {GENDER_KEYWORDS[token] for token in tokens if token in GENDER_KEYWORDS}
-    if len(genders_found) == 1:
-        filters["gender"] = next(iter(genders_found))
-        parsed_any = True
-
-    for token in tokens:
-        if token in AGE_GROUP_KEYWORDS:
-            filters["age_group"] = AGE_GROUP_KEYWORDS[token]
-            parsed_any = True
-            break
-
-    if any(token in YOUNG_KEYWORDS for token in tokens):
-        filters["min_age"] = 16
-        filters["max_age"] = 24
-        parsed_any = True
-
-    above_match = re.search(r"(?:above|over|older than|greater than|at least)\s+(\d{1,3})", cleaned)
-    if above_match:
-        filters["min_age"] = int(above_match.group(1))
-        parsed_any = True
-
-    below_match = re.search(r"(?:below|under|younger than|less than|at most)\s+(\d{1,3})", cleaned)
-    if below_match:
-        filters["max_age"] = int(below_match.group(1))
-        parsed_any = True
-
-    country_id: Optional[str] = None
-    country_match = re.search(r"\bfrom\s+([a-zA-Z\s']+)\b", cleaned)
-    if country_match:
-        country_phrase = country_match.group(1).strip()
-        for keyword in sorted(COUNTRY_KEYWORDS.keys(), key=len, reverse=True):
-            if country_phrase.startswith(keyword):
-                country_id = COUNTRY_KEYWORDS[keyword]
-                break
-        if not country_id:
-            for keyword in sorted(COUNTRY_ADJECTIVE_KEYWORDS.keys(), key=len, reverse=True):
-                if country_phrase.startswith(keyword):
-                    country_id = COUNTRY_ADJECTIVE_KEYWORDS[keyword]
-                    break
-
-    if not country_id:
-        for keyword in sorted(COUNTRY_KEYWORDS.keys(), key=len, reverse=True):
-            if re.search(rf"\b{re.escape(keyword)}\b", cleaned):
-                country_id = COUNTRY_KEYWORDS[keyword]
-                break
-
-    if not country_id:
-        for keyword in sorted(COUNTRY_ADJECTIVE_KEYWORDS.keys(), key=len, reverse=True):
-            if re.search(rf"\b{re.escape(keyword)}\b", cleaned):
-                country_id = COUNTRY_ADJECTIVE_KEYWORDS[keyword]
-                break
-
-    if country_id:
-        filters["country_id"] = country_id
-        parsed_any = True
-
-    if filters.get("min_age") is not None and filters.get("max_age") is not None and filters["min_age"] > filters["max_age"]:
-        raise HTTPException(status_code=422, detail="Invalid query parameters")
-
-    if not parsed_any:
-        raise HTTPException(status_code=400, detail="Unable to interpret query")
-
-    return filters
 
 
 def seed_profiles(db: Session) -> None:
@@ -409,6 +327,7 @@ def seed_profiles(db: Session) -> None:
 
 
 
+
 async def fetch_external_json(client: httpx.AsyncClient, url: str, service_name: str) -> dict[str, Any]:
     try:
         response = await client.get(url, timeout=10.0)
@@ -423,7 +342,7 @@ async def fetch_external_json(client: httpx.AsyncClient, url: str, service_name:
 
 
 @app.post("/api/profiles", status_code=status.HTTP_201_CREATED)
-async def create_profile(request: Request, db: Session = Depends(get_db)):
+async def create_profile(request: Request, user: User = Depends(require_admin), db: Session = Depends(get_db)):
     try:
         payload = await request.json()
     except Exception:
@@ -536,6 +455,7 @@ async def search_profiles(
     q: Optional[str] = Query(default=None),
     page: int = Query(default=1),
     limit: int = Query(default=10),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if q is None or not isinstance(q, str) or not q.strip():
@@ -577,7 +497,7 @@ async def search_profiles(
 
 
 @app.get("/api/profiles/{profile_id}")
-async def get_single_profile(profile_id: str, db: Session = Depends(get_db)):
+async def get_single_profile(profile_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -599,6 +519,7 @@ async def get_all_profiles(
     order: str = Query(default="desc"),
     page: int = Query(default=1),
     limit: int = Query(default=10),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     page, limit = normalize_pagination(page, limit)
@@ -638,14 +559,81 @@ async def get_all_profiles(
 
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
 
     return {
         "status": "success",
         "page": page,
         "limit": limit,
         "total": total,
+        "total_pages": total_pages,
+        "links": {
+            "self": f"/api/profiles?page={page}&limit={limit}",
+            "next": f"/api/profiles?page={page+1}&limit={limit}" if page < total_pages else None,
+            "prev": f"/api/profiles?page={page-1}&limit={limit}" if page > 1 else None
+        },
         "data": [serialize_profile(profile) for profile in profiles],
+
     }
+
+
+@app.get("/api/profiles/export")
+async def export_profiles(
+    gender: Optional[str] = Query(default=None),
+    age_group: Optional[str] = Query(default=None),
+    country_id: Optional[str] = Query(default=None),
+    min_age: Optional[int] = Query(default=None),
+    max_age: Optional[int] = Query(default=None),
+    min_gender_probability: Optional[float] = Query(default=None),
+    min_country_probability: Optional[float] = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    order: str = Query(default="desc"),
+   
+    format: str = Query(default="csv"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if format.lower() != "csv":
+        raise HTTPException(status_code=400, detail="Only CSV format is supported")
+
+    query = db.query(Profile)
+    
+    query = apply_profile_filters(
+        query,
+        gender=gender,
+        age_group=age_group,
+        country_id=country_id,
+        min_age=min_age,
+        max_age=max_age,
+        min_gender_probability=min_gender_probability,
+        min_country_probability=min_country_probability,
+    )
+
+
+    if sort_by in SORT_COLUMN_MAP:
+        sort_column = getattr(Profile, SORT_COLUMN_MAP[sort_by])
+        if order.lower() == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+    profiles = query.all()
+
+    stream = StringIO()
+    writer = csv.writer(stream)
+    
+    writer.writerow(["id", "name", "gender", "gender_probability", "age", "age_group", "country_id", "country_name", "country_probability", "created_at"])
+    
+    for p in profiles:
+        writer.writerow([
+            p.id, p.name, p.gender, p.gender_probability, p.age, p.age_group, 
+            p.country_id, COUNTRY_NAME_BY_ID.get(p.country_id, p.country_id), 
+            p.country_probability, p.created_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        ])
+
+    response = StreamingResponse(iter([stream.getvalue()]), media_type="text/csv")
+    response.headers["Content-Disposition"] = f'attachment; filename="profiles_{int(time.time())}.csv"'
+    return response
 
 
 @app.on_event("startup")
@@ -659,7 +647,7 @@ def seed_on_startup() -> None:
 
 
 @app.delete("/api/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_profile(profile_id: str, db: Session = Depends(get_db)):
+async def delete_profile(profile_id: str, user: User = Depends(require_admin), db: Session = Depends(get_db)):
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -667,3 +655,4 @@ async def delete_profile(profile_id: str, db: Session = Depends(get_db)):
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+app.include_router(auth_router)
