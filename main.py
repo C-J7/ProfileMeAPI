@@ -131,7 +131,7 @@ class User(Base):
     username = Column(String, nullable=False)
     email = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
-    role = Column(Enum(StatusEnum), nullable=False, default="analyst")
+    role = Column(String, nullable=False, default="analyst")
     is_active = Column(Boolean, nullable=False, default=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
