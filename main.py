@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
-from sqlalchemy import Column, Enum, Boolean, DateTime, Float, Integer, String, create_engine, func, inspect
+from sqlalchemy import Column, Boolean, DateTime, Float, Integer, String, create_engine, func, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from uuid6 import uuid7
@@ -171,8 +171,8 @@ app = FastAPI(title="ProfileMeAPI")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["http://localhost:5173/"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
